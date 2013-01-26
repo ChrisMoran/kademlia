@@ -94,6 +94,13 @@ func main() {
 			}
 			req := new(kademlia.StoreRequest)
 			req.MsgID = kademlia.NewRandomID()
+			req.Key, err = kademlia.FromString(command_parts[1])
+			if err != nil {
+				fmt.Printf("ERR: %v\n", err)
+				continue
+			}
+
+			req.Value = []byte(command_parts[2])
 			var res kademlia.StoreResult
 			err = client.Call("Kademlia.Store", req, &res)
 			if err != nil {
@@ -101,7 +108,7 @@ func main() {
 				continue
 			}
 			
-			fmt.Println("IMPLEMENT ME")
+			fmt.Println("OK")
 		case bytes.Equal(command, []byte("find_node")):
 			if len(command_parts) != 2 {
 				fmt.Println("Invalid format find_node\n\tfind_node key")
@@ -113,6 +120,11 @@ func main() {
 			}
 			req := new(kademlia.FindNodeRequest)
 			req.MsgID = kademlia.NewRandomID()
+			req.NodeID, err = kademlia.FromString(command_parts[1])
+			if err != nil {
+				fmt.Printf("ERR: %v\n", err)
+				continue
+			}
 			var res kademlia.FindNodeResult
 			err = client.Call("Kademlia.FindNode", req, &res)
 			if err != nil {
@@ -120,7 +132,7 @@ func main() {
 				continue
 			}
 			
-			fmt.Printf("IMPLEMENT ME!\n")
+			fmt.Printf("OK\n")
 		case bytes.Equal(command, []byte("find_value")):
 			if len(command_parts) != 2 {
 				fmt.Println("Invalid format find_value\n\tfind_value key")
@@ -133,6 +145,11 @@ func main() {
 			}
 			req := new(kademlia.FindValueRequest)
 			req.MsgID = kademlia.NewRandomID()
+			req.Key, err = kademlia.FromString(command_parts[1])
+			if err != nil {
+				fmt.Printf("ERR: %v\n", err)
+				continue
+			}
 			var res kademlia.FindValueResult
 			err = client.Call("Kademlia.FindValue", req, &res)
 			if err != nil {
