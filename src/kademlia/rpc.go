@@ -32,9 +32,16 @@ type StoreResult struct {
     Err error
 }
 
+
+
 func (k *Kademlia) Store(req StoreRequest, res *StoreResult) error {
-    // TODO: Implement.
-    return nil
+	var sliceCopy []byte = make([]byte, len(req.Value))
+	copy(sliceCopy, req.Value)
+	k.storedDataMutex.Lock()
+	k.StoredData[CopyID(req.Key)] = sliceCopy
+	k.storedDataMutex.Unlock()
+	res.MsgID = CopyID(req.MsgID)
+	return nil
 }
 
 

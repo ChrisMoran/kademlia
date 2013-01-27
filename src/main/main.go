@@ -19,6 +19,29 @@ import (
     "kademlia"
 )
 
+func doPing(addressOrId string) {
+	var pingAddress string
+	if len(strings.Split(addressOrId, string(":"))) == 2 {
+		pingAddress = addressOrId
+	} else {
+		log.Fatal("Implement ping for node id")
+	}
+	client, err := rpc.DialHTTP("tcp", pingAddress)
+	if err != nil {
+		log.Fatal("DialHTTP: ", err)
+	}
+	ping := new(kademlia.Ping)
+	ping.MsgID = kademlia.NewRandomID()
+	var pong kademlia.Pong
+	err = client.Call("Kademlia.Ping", ping, &pong)
+	if err != nil {
+		log.Fatal("Call: ", err)
+	}
+	
+	log.Printf("ping msgID: %s\n", ping.MsgID.AsString())
+	log.Printf("pong msgID: %s\n", pong.MsgID.AsString())
+}
+
 
 func main() {
 	// By default, Go seeds its RNG with 1. This would cause every program to
@@ -68,21 +91,7 @@ func main() {
 				fmt.Println("Invalid format ping\n\tping nodeID\n\tping host:port")
 				continue
 			}
-			client, err := rpc.DialHTTP("tcp", firstPeerStr)
-			if err != nil {
-				log.Fatal("DialHTTP: ", err)
-			}
-			ping := new(kademlia.Ping)
-			ping.MsgID = kademlia.NewRandomID()
-			var pong kademlia.Pong
-			err = client.Call("Kademlia.Ping", ping, &pong)
-			if err != nil {
-				log.Fatal("Call: ", err)
-			}
-			
-			log.Printf("ping msgID: %s\n", ping.MsgID.AsString())
-			log.Printf("pong msgID: %s\n", pong.MsgID.AsString())
-
+			doPing(command_parts[1])
 		case bytes.Equal(command, []byte("store")):
 			if len(command_parts) != 3 {
 				fmt.Println("Invalid format store\n\tstore key data")
@@ -163,13 +172,24 @@ func main() {
 				fmt.Println("Invalid format get_node_id\n\tget_node_id")
 				continue
 			}
-			fmt.Println("Getting local node id")
+			fmt.Printf("OK: %v\n", kadem.NodeID)
 		case bytes.Equal(command, []byte("get_local_value")):
 			if len(command_parts) != 2 {
 				fmt.Println("Invalid format get_local_value\n\tget_local_value key")
 				continue
 			}
-			fmt.Printf("Getting local node value %s\n", command_parts[1])
+			key, err := kademlia.FromString(command_parts[1])
+			if err != nil {
+				fmt.Printf("ERR: %v\n", err)
+				continue
+			}
+			var val []byte
+			val = kadem.StoredData[key]
+			if val != nil {
+				fmt.Printf("OK: %s\n", string(val))
+			} else {
+				fmt.Printf("ERR no data for key\n")
+			}
 		default:
 			fmt.Printf("Unknown command: %s\n", command_parts[0])
 		}
