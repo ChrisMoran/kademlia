@@ -83,7 +83,7 @@ type FindNodeResult struct {
 func (k *Kademlia) FindNode(req FindNodeRequest, res *FindNodeResult) error {
 	go k.UpdateContacts(req.Sender)
 	res.MsgID = CopyID(req.MsgID)
-	res.Nodes = k.FindCloseContacts(req.NodeID, MaxBucketSize)
+	res.Nodes = k.FindCloseContacts(req.NodeID, req.Sender.NodeID, MaxBucketSize)
 	return nil
 }
 
@@ -119,7 +119,7 @@ func (k *Kademlia) FindValue(req FindValueRequest, res *FindValueResult) error {
 		res.Value = make([]byte, len(val))
 		copy(res.Value, val)
 	} else {
-		res.Nodes = k.FindCloseContacts(req.Key, MaxBucketSize)
+		res.Nodes = k.FindCloseContacts(req.Key, req.Sender.NodeID, MaxBucketSize)
 	}
 
 	return nil

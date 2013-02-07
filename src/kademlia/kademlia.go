@@ -23,7 +23,7 @@ type Kademlia struct {
 	storedDataMutex sync.Mutex
 	StoredData      map[ID][]byte
 	Contacts        BucketList
-	contactsMutex   [IDBytes * 8]sync.Mutex
+	contactsMutex   [BucketCount]sync.Mutex
 }
 
 func CreateBucketList() (blist BucketList) {
@@ -93,33 +93,35 @@ func ContactToFoundNode(con Contact) FoundNode {
 }
 
 // assumes bucket is already locked, slice has proper capacity
-func AddBucketContentsToSlice(bucket *list.List, s []FoundNode) {
-	var maxToAdd, count int = cap(s) - len(s), 0
+func AddBucketContentsToSlice(bucket *list.List, requester ID, s *[]FoundNode) {
+	var maxToAdd, count int = cap(*s) - len(*s), 0
 	for con := bucket.Front(); con != nil && count < maxToAdd; con = con.Next() {
-		_ = append(s, ContactToFoundNode(con.Value.(Contact)))
-		count += 1
+		if false == con.Value.(Contact).NodeID.Equals(requester) {
+			*s = append(*s, ContactToFoundNode(con.Value.(Contact)))
+			count += 1
+		}
 	}
 }
 
-func AddBucketToSlice(k *Kademlia, bucketNum int, s []FoundNode) {
+func AddBucketToSlice(k *Kademlia, requester ID, bucketNum int, s *[]FoundNode) {
 	k.contactsMutex[bucketNum].Lock()
-	AddBucketContentsToSlice(k.Contacts[bucketNum], s)
+	AddBucketContentsToSlice(k.Contacts[bucketNum], requester, s)
 	k.contactsMutex[bucketNum].Unlock()
 }
 
-func (k *Kademlia) FindCloseContacts(key ID, totalNum int) []FoundNode {
+func (k *Kademlia) FindCloseContacts(key ID, requester ID, totalNum int) []FoundNode {
 	pre := k.NodeID.Xor(key).PrefixLen()
 	nodes := make([]FoundNode, 0, totalNum)
 
-	AddBucketToSlice(k, pre, nodes)
+	AddBucketToSlice(k, requester, pre, &nodes)
 
 	for i := 1; (i <= pre || i+pre < BucketCount) && len(nodes) < totalNum; i++ {
 		if i <= pre {
-			AddBucketToSlice(k, pre-i, nodes)
+			AddBucketToSlice(k, requester, pre-i, &nodes)
 		}
 
 		if i+pre < BucketCount {
-			AddBucketToSlice(k, i+pre, nodes)
+			AddBucketToSlice(k, requester, i+pre, &nodes)
 		}
 	}
 
