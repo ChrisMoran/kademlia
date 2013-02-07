@@ -2,9 +2,13 @@ package kademlia
 
 import (
 	"bytes"
+	"fmt"
 	"math/rand"
 	"net"
+	"net/http"
+	"net/rpc"
 	"os"
+	"sort"
 	"testing"
 )
 
@@ -43,6 +47,61 @@ func createContacts(size int) []Contact {
 		contacts[i] = makeRandomContact()
 	}
 	return contacts
+}
+
+type contactDistance struct {
+	Con  Contact
+	Dist int
+}
+
+type distanceSlice []contactDistance
+
+func (ds distanceSlice) Len() int {
+	return len(ds)
+}
+
+func (ds distanceSlice) Less(i, j int) bool {
+	return ds[i].Dist < ds[j].Dist
+}
+
+func (ds distanceSlice) Swap(i, j int) {
+	temp := ds[i]
+	ds[i] = ds[j]
+	ds[j] = temp
+}
+
+func startRpcClosure() func(Contact) error {
+	hasRpcStarted := false
+	return func(con Contact) error {
+		if hasRpcStarted == false {
+			kadem := NewKademlia()
+			kadem.NodeID = CopyID(con.NodeID)
+			rpc.Register(kadem)
+			rpc.HandleHTTP()
+			hasRpcStarted = true
+		}
+		addrStr := fmt.Sprintf("%s:%d", con.Host.String(), con.Port)
+
+		l, err := net.Listen("tcp", addrStr)
+		if err != nil {
+			return err
+		}
+
+		// Serve forever.
+		go http.Serve(l, nil)
+		return nil
+	}
+}
+
+var startRpcServer = startRpcClosure()
+
+func TestPingWorks(t *testing.T) {
+	k := NewKademlia()
+	sender, msgId := makeRandomContact(), NewRandomID()
+	req := Ping{Sender: sender, MsgID: msgId}
+	res := new(Pong)
+	k.Ping(req, res)
+	checkMessageId(t, msgId, res.MsgID)
 }
 
 func TestStoreKey(t *testing.T) {
@@ -191,15 +250,42 @@ func TestFindNodesWithExactlyLimit(t *testing.T) {
 	}
 }
 
+func abs(i int) int {
+	if i < 0 {
+		return -i
+	}
+	return i
+}
+
 func TestFindNodesWithMoreContacts(t *testing.T) {
 	k := NewKademlia()
 	contacts := createContacts(4 * MaxBucketSize) // 10 
 
+	me, msgId := makeRandomContact(), NewRandomID()
+	ds := make(distanceSlice, 4*MaxBucketSize)
+	lookupDist := k.NodeID.Xor(me.NodeID).PrefixLen()
+	count := 0
+
 	for _, con := range contacts {
+
 		k.UpdateContacts(con)
+		ds[count] = contactDistance{Con: con,
+			Dist: abs(k.NodeID.Xor(con.NodeID).PrefixLen() - lookupDist)}
+		count += 1
+		startRpcServer(con)
+	}
+	//ds = ds[4*MaxBucketSize : len(ds)]
+	sort.Sort(ds)
+
+	//find which nodes should be in the result list
+	tenDist, cutoff := ds[9].Dist, 10
+	for ; cutoff < 4*MaxBucketSize; cutoff += 1 {
+		if ds[cutoff].Dist > tenDist {
+			break
+		}
 	}
 
-	me, msgId := makeRandomContact(), NewRandomID()
+	ds = ds[0:cutoff]
 
 	req := FindNodeRequest{Sender: me, MsgID: msgId, NodeID: me.NodeID}
 	res := new(FindNodeResult)
@@ -217,14 +303,15 @@ func TestFindNodesWithMoreContacts(t *testing.T) {
 
 	for _, node := range res.Nodes {
 		found := false
-		for _, con := range contacts {
-			if con.NodeID.Equals(node.NodeID) {
+		for _, con := range ds {
+			if con.Con.NodeID.Equals(node.NodeID) {
 				found = true
 				break
 			}
 		}
 		if false == found {
-			t.Errorf("Did not find contact %v in result list", node)
+			missingDist := k.NodeID.Xor(node.NodeID).PrefixLen()
+			t.Errorf("Did not find at dist %d contact %v in result list\n", missingDist, node)
 			t.Fail()
 		}
 	}
