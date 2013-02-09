@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -58,12 +59,30 @@ func main() {
 
 	fmt.Printf("kademlia starting up!\n")
 	kadem := kademlia.NewKademlia()
+	myIpPort := strings.Split(listenStr, ":")
+	if len(myIpPort) != 2 {
+		log.Fatal("Invalid format of arg one, expected IP:PORT\n")
+	}
+	if strings.Contains(myIpPort[0], "localhost") {
+		myIpPort[0] = "127.0.0.1"
+	}
 
 	ipAndPort := strings.Split(firstPeerStr, ":")
 	if len(ipAndPort) != 2 {
 		log.Fatal("Invalid format of arg two, expected IP:PORT\n")
 	}
-	kadem.Join(ipAndPort[0], ipAndPort[1])
+
+	if false == strings.Contains(listenStr, firstPeerStr) {
+		port, err := strconv.Atoi(myIpPort[1])
+		if err != nil {
+			log.Fatal("Could not parse local port\n")
+		}
+		me := kademlia.Contact{NodeID: kademlia.CopyID(kadem.NodeID), Host: net.ParseIP(myIpPort[0]), Port: uint16(port)}
+		err = kadem.Join(me, ipAndPort[0], ipAndPort[1])
+		if err != nil {
+			log.Fatal("Error joinging network", err)
+		}
+	}
 
 	rpc.Register(kadem)
 	rpc.HandleHTTP()
@@ -147,7 +166,7 @@ func main() {
 			fmt.Printf("OK\n")
 			fmt.Print("Nodes:")
 			for _, node := range res.Nodes {
-				fmt.Printf("%v\n", node)
+				fmt.Printf("%s %v %v\n", node.NodeID.AsString(), node.IPAddr, node.Port)
 			}
 
 		case bytes.Equal(command, []byte("find_value")):
@@ -178,7 +197,7 @@ func main() {
 			} else {
 				fmt.Print("Found nodes")
 				for _, node := range res.Nodes {
-					fmt.Printf("%v\n", node)
+					fmt.Printf("%s %v %v\n", node.NodeID.AsString(), node.IPAddr, node.Port)
 				}
 			}
 
@@ -187,7 +206,7 @@ func main() {
 				fmt.Println("Invalid format get_node_id\n\tget_node_id")
 				continue
 			}
-			fmt.Printf("OK: %v\n", kadem.NodeID)
+			fmt.Printf("OK: %s\n", kadem.NodeID.AsString())
 		case bytes.Equal(command, []byte("get_local_value")):
 			if len(command_parts) != 2 {
 				fmt.Println("Invalid format get_local_value\n\tget_local_value key")

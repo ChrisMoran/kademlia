@@ -149,8 +149,23 @@ func (k *Kademlia) FindCloseContacts(key ID, requester ID, totalNum int) []Conta
 	return nodes
 }
 
-func (k *Kademlia) Join(ip string, port string) {
-	// we don't know the node id of the first contact...
+func (k *Kademlia) Join(me Contact, ip string, port string) error {
+	// do an rpc call of findnode
+	req := FindNodeRequest{Sender: me, MsgID: NewRandomID(), NodeID: k.NodeID}
+	res := new(FindNodeResult)
+
+	client, err := rpc.DialHTTP("tcp", fmt.Sprintf("%s:%s", ip, port))
+	if err != nil {
+		return err
+	}
+	err = client.Call("Kademlia.FindNode", req, res)
+	if err != nil {
+		return err
+	}
+	for _, node := range res.Nodes {
+		go k.UpdateContacts(FoundNodeToContact(node))
+	}
+	return nil
 }
 
 func NewKademlia() *Kademlia {
