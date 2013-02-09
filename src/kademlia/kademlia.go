@@ -149,6 +149,10 @@ func (k *Kademlia) FindCloseContacts(key ID, requester ID, totalNum int) []Conta
 	return nodes
 }
 
+func (k *Kademlia) Join(ip string, port string) {
+	// we don't know the node id of the first contact...
+}
+
 func NewKademlia() *Kademlia {
 	// TODO: Assign yourself a random ID and prepare other state here.	
 	var inst *Kademlia = new(Kademlia)
