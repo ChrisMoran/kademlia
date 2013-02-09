@@ -8,6 +8,7 @@ package kademlia
 import (
 	"container/list"
 	"fmt"
+	"net"
 	"net/rpc"
 	"sync"
 )
@@ -92,6 +93,10 @@ func (k *Kademlia) UpdateContacts(con Contact) {
 
 func ContactToFoundNode(con Contact) FoundNode {
 	return FoundNode{IPAddr: con.Host.String(), Port: con.Port, NodeID: CopyID(con.NodeID)}
+}
+
+func FoundNodeToContact(node FoundNode) Contact {
+	return Contact{NodeID: CopyID(node.NodeID), Port: node.Port, Host: net.ParseIP(node.IPAddr)}
 }
 
 // assumes bucket is already locked, slice has proper capacity
