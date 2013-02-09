@@ -4,7 +4,13 @@ package kademlia
 // strictly to these to be compatible with the reference implementation and
 // other groups' code.
 
-import "net"
+import (
+	"errors"
+	"fmt"
+	"net"
+	"net/rpc"
+	"sort"
+)
 
 // Host identification.
 type Contact struct {
@@ -53,8 +59,44 @@ func (k *Kademlia) Store(req StoreRequest, res *StoreResult) error {
 	return nil
 }
 
+func contactToAddressString(con Contact) string {
+	return fmt.Sprintf("%s:%d", con.Host.String(), con.Port)
+}
+
+func foundNodeToAddrStr(node FoundNode) string {
+	return fmt.Sprintf("%s:%d", node.IPAddr, node.Port)
+}
+
+func makeStoreRequest(node FoundNode, req StoreRequest, res *StoreResult) {
+	client, err := rpc.DialHTTP("tcp", foundNodeToAddrStr(node))
+	if err != nil {
+		res.Err = err
+		return
+	}
+
+	err = client.Call("Kademlia.Store", req, res)
+	if err != nil && res.Err == nil {
+		res.Err = err
+	}
+}
+
 func (k *Kademlia) IterStore(req StoreRequest, res *StoreResult) error {
-	// do iterative store
+	//nodes := k.FindCloseContacts(req.Key, k.NodeID, K)
+	res.MsgID = CopyID(req.MsgID)
+	fnReq := FindNodeRequest{Sender: req.Sender, MsgID: NewRandomID(), NodeID: CopyID(req.Key)}
+	fnRes := new(FindNodeResult)
+	k.IterFindNode(fnReq, fnRes)
+	if fnRes.Err != nil {
+		res.Err = fnRes.Err
+	} else {
+		localRes := new(StoreResult)
+		for _, node := range fnRes.Nodes {
+			makeStoreRequest(node, req, localRes)
+			if localRes.Err != nil {
+				res.Err = localRes.Err
+			}
+		}
+	}
 	return nil
 }
 
@@ -77,18 +119,149 @@ type FindNodeResult struct {
 	Err   error
 }
 
+type FindNodeResultWithID struct {
+	Res      FindNodeResult
+	SourceID ID
+}
+
+type foundNodeDistance struct {
+	Node      FoundNode
+	PrefixLen int
+	Queried   bool
+}
+
+type nodeDistanceVector struct {
+	Closest int
+	Nodes   []foundNodeDistance
+}
+
+func (ndv nodeDistanceVector) Len() int {
+	return len(ndv.Nodes)
+}
+
+func (ndv nodeDistanceVector) Less(i, j int) bool {
+	return ndv.Nodes[i].PrefixLen > ndv.Nodes[j].PrefixLen
+}
+
+func (ndv nodeDistanceVector) Swap(i, j int) {
+	temp := ndv.Nodes[i]
+	ndv.Nodes[i] = ndv.Nodes[j]
+	ndv.Nodes[j] = temp
+}
+
 //SPEC: returns up to k triples for the contacts that it knows to be closest to the key
 //      should never return a triple with node id of requestor, or its own id
 //      primitive operation, not an iterative one
 func (k *Kademlia) FindNode(req FindNodeRequest, res *FindNodeResult) error {
 	go k.UpdateContacts(req.Sender)
 	res.MsgID = CopyID(req.MsgID)
-	res.Nodes = k.FindCloseContacts(req.NodeID, req.Sender.NodeID, MaxBucketSize)
+	res.Nodes = k.FindCloseNodes(req.NodeID, req.Sender.NodeID, MaxBucketSize)
 	return nil
+}
+
+func remoteFindNode(node FoundNode, req FindNodeRequest, res chan FindNodeResultWithID) {
+	retRes := new(FindNodeResult)
+	defer (func() { res <- FindNodeResultWithID{Res: *retRes, SourceID: CopyID(node.NodeID)} })()
+	client, err := rpc.DialHTTP("tcp", foundNodeToAddrStr(node))
+	if err != nil {
+		retRes.Err = err
+		return
+	}
+	req.MsgID = NewRandomID()
+	err = client.Call("Kademlia.FindNode", req, retRes)
+	if err != nil && retRes.Err == nil {
+		retRes.Err = err
+	}
+	if false == req.MsgID.Equals(retRes.MsgID) {
+		retRes.Err = errors.New("Invalid message id returned")
+	}
 }
 
 func (k *Kademlia) IterFindNode(req FindNodeRequest, res *FindNodeResult) error {
 	// do iterative find node
+	nodes := k.FindCloseNodes(req.NodeID, k.NodeID, K)
+	res.MsgID = CopyID(req.MsgID)
+	nodes = nodes[0:ALPHA]
+	ndv := nodeDistanceVector{Nodes: make([]foundNodeDistance, 0, K)}
+	for _, node := range nodes {
+		ndv.Nodes = append(ndv.Nodes, foundNodeDistance{Node: node,
+			PrefixLen: req.MsgID.Xor(node.NodeID).PrefixLen(),
+			Queried:   false})
+	}
+	sort.Sort(ndv) // being lazy
+	ndv.Closest = ndv.Nodes[0].PrefixLen
+	resChan := make(chan FindNodeResultWithID, 3)
+	doneYet := false
+
+	for doneYet == false {
+		queryCount := 0
+		for _, node := range ndv.Nodes {
+			if node.Queried == false {
+				node.Queried, queryCount = true, queryCount+1
+				go remoteFindNode(node.Node, req, resChan)
+				if queryCount == 3 {
+					break
+				}
+			}
+		}
+		if queryCount == 0 {
+			doneYet = true
+		}
+		for i := 0; i < queryCount; i++ {
+			nodeRes := <-resChan
+			if nodeRes.Res.Err != nil {
+				// TODO : remove node from list
+				for index, node := range ndv.Nodes {
+					if node.Node.NodeID.Equals(nodeRes.SourceID) {
+						ndv.Nodes = append(ndv.Nodes[:index], ndv.Nodes[i+1:]...)
+						break
+					}
+				}
+				continue
+			}
+
+			// incorporate results into list
+			// make a temp container to sort all known nodes so we can grab the closest
+			tempNdv := new(nodeDistanceVector)
+			tempNdv.Nodes = make([]foundNodeDistance, len(ndv.Nodes), 2*K)
+			copy(tempNdv.Nodes, ndv.Nodes)
+
+			for _, node := range nodeRes.Res.Nodes {
+				// check if we already know about this node
+				known := false
+				for _, knownNode := range ndv.Nodes {
+					if knownNode.Node.NodeID.Equals(node.NodeID) {
+						known = true
+					}
+				}
+				if known == false {
+					newNode := foundNodeDistance{Node: node,
+						PrefixLen: req.MsgID.Xor(node.NodeID).PrefixLen(),
+						Queried:   false}
+					tempNdv.Nodes = append(tempNdv.Nodes, newNode)
+				}
+			}
+			sort.Sort(tempNdv)
+
+			endIndex := K
+			if len(tempNdv.Nodes) < K {
+				endIndex = len(tempNdv.Nodes)
+			}
+			for index, node := range tempNdv.Nodes[0:endIndex] {
+				if index < len(ndv.Nodes) {
+					ndv.Nodes[index] = node
+				} else {
+					ndv.Nodes = append(ndv.Nodes, node)
+				}
+			}
+		}
+	}
+
+	res.Nodes = make([]FoundNode, len(ndv.Nodes))
+	for _, node := range ndv.Nodes {
+		res.Nodes = append(res.Nodes, node.Node)
+	}
+
 	return nil
 }
 
@@ -108,6 +281,8 @@ type FindValueResult struct {
 	Err   error
 }
 
+func (f *FindValueResult) SetErr(err error) { f.Err = err }
+
 // SPEC: if corresponding value is present, assocaited data is returned, other acts like FindNode
 func (k *Kademlia) FindValue(req FindValueRequest, res *FindValueResult) error {
 	go k.UpdateContacts(req.Sender)
@@ -119,7 +294,7 @@ func (k *Kademlia) FindValue(req FindValueRequest, res *FindValueResult) error {
 		res.Value = make([]byte, len(val))
 		copy(res.Value, val)
 	} else {
-		res.Nodes = k.FindCloseContacts(req.Key, req.Sender.NodeID, MaxBucketSize)
+		res.Nodes = k.FindCloseNodes(req.Key, req.Sender.NodeID, MaxBucketSize)
 	}
 
 	return nil
