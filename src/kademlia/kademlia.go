@@ -7,6 +7,7 @@ package kademlia
 
 import (
 	"container/list"
+	"errors"
 	"fmt"
 	"net"
 	"net/rpc"
@@ -34,6 +35,20 @@ func CreateBucketList() (blist BucketList) {
 		blist[i] = list.New()
 	}
 	return
+}
+
+func (k *Kademlia) ContactFromID(id ID) (c Contact, e error) {
+	prefix := k.NodeID.Xor(id).PrefixLen()
+	k.contactsMutex[prefix].Lock()
+	defer k.contactsMutex[prefix].Unlock()
+	bucket := k.Contacts[prefix]
+	for con := bucket.Front(); con != nil; con = con.Next() {
+		if con.Value.(Contact).NodeID.Equals(id) {
+			return con.Value.(Contact), nil
+		}
+	}
+	e = errors.New("ID is not known")
+	return Contact{}, e
 }
 
 func (k *Kademlia) removeOldContacts(bucketNum int) (removed int) {

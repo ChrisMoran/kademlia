@@ -80,15 +80,21 @@ func makeStoreRequest(node FoundNode, req StoreRequest, res *StoreResult) {
 	}
 }
 
-func (k *Kademlia) IterStore(req StoreRequest, res *StoreResult) error {
+func (k *Kademlia) IterStore(req StoreRequest, res *StoreResult) FoundNode {
 	//nodes := k.FindCloseContacts(req.Key, k.NodeID, K)
 	res.MsgID = CopyID(req.MsgID)
 	fnReq := FindNodeRequest{Sender: req.Sender, MsgID: NewRandomID(), NodeID: CopyID(req.Key)}
 	fnRes := new(FindNodeResult)
 	k.IterFindNode(fnReq, fnRes)
-	if fnRes.Err != nil {
-		res.Err = fnRes.Err
-	} else {
+	var lastNode FoundNode = FoundNode{}
+	if len(fnRes.Nodes) > 0 {
+
+		lastNode = fnRes.Nodes[len(fnRes.Nodes)-1]
+
+		if fnRes.Err != nil {
+			res.Err = fnRes.Err
+		}
+
 		localRes := new(StoreResult)
 		for _, node := range fnRes.Nodes {
 			makeStoreRequest(node, req, localRes)
@@ -97,7 +103,7 @@ func (k *Kademlia) IterStore(req StoreRequest, res *StoreResult) error {
 			}
 		}
 	}
-	return nil
+	return lastNode
 }
 
 // FIND_NODE
@@ -325,6 +331,8 @@ func remoteFindValue(node FoundNode, req FindValueRequest, res chan FindValueRes
 	}
 }
 
+// if we find the value, the first foundnode in the result slice is the one that returned it
+// spec doesn't say to check if the value is locally available, so we don't
 func (k *Kademlia) IterFindValue(req FindValueRequest, res *FindValueResult) error {
 	// do iterative find value
 	nodes := k.FindCloseNodes(req.Key, k.NodeID, K)
@@ -371,6 +379,9 @@ func (k *Kademlia) IterFindValue(req FindValueRequest, res *FindValueResult) err
 			if nodeRes.Res.Value != nil {
 				res.Value = make([]byte, len(nodeRes.Res.Value))
 				copy(res.Value, nodeRes.Res.Value)
+				// these are here just for the command line to return the finder's ID
+				res.Nodes = make([]FoundNode, 0, 1)
+				res.Nodes = append(res.Nodes, FoundNode{NodeID: CopyID(nodeRes.SourceID)})
 				break
 			}
 
