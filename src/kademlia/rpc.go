@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/rpc"
 	"sort"
+	"time"
 )
 
 // Host identification.
@@ -155,6 +156,15 @@ func (ndv nodeDistanceVector) Swap(i, j int) {
 	ndv.Nodes[j] = temp
 }
 
+func makeTimeout(b chan bool, seconds int) {
+	dur, err := time.ParseDuration(fmt.Sprintf("%d s", seconds))
+	if err != nil {
+		dur = 1 * time.Second
+	}
+	time.Sleep(dur)
+	b <- true
+}
+
 //SPEC: returns up to k triples for the contacts that it knows to be closest to the key
 //      should never return a triple with node id of requestor, or its own id
 //      primitive operation, not an iterative one
@@ -199,6 +209,10 @@ func (k *Kademlia) IterFindNode(req FindNodeRequest, res *FindNodeResult) error 
 	resChan := make(chan FindNodeResultWithID, ALPHA)
 	doneYet := false
 
+	//timeout after 8 seconds
+	timeoutChan := make(chan bool, 1)
+	go makeTimeout(timeoutChan, 8)
+
 	for doneYet == false {
 		queryCount := 0
 		for _, node := range ndv.Nodes {
@@ -213,8 +227,18 @@ func (k *Kademlia) IterFindNode(req FindNodeRequest, res *FindNodeResult) error 
 		if queryCount == 0 {
 			doneYet = true
 		}
+		exit := false
 		for i := 0; i < queryCount; i++ {
-			nodeRes := <-resChan
+			var nodeRes FindNodeResultWithID
+			select {
+			case <-timeoutChan:
+				exit = true
+			case nodeRes = <-resChan:
+			}
+			if exit {
+				doneYet = true
+				break
+			}
 			if nodeRes.Res.Err != nil {
 				// TODO : remove node from list
 				for index, node := range ndv.Nodes {
@@ -349,6 +373,9 @@ func (k *Kademlia) IterFindValue(req FindValueRequest, res *FindValueResult) err
 	resChan := make(chan FindValueResultWithID, ALPHA)
 	doneYet := false
 
+	timeoutChan := make(chan bool, 1)
+	go makeTimeout(timeoutChan, 8)
+
 	for doneYet == false {
 		queryCount := 0
 		for _, node := range ndv.Nodes {
@@ -363,8 +390,20 @@ func (k *Kademlia) IterFindValue(req FindValueRequest, res *FindValueResult) err
 		if queryCount == 0 {
 			doneYet = true
 		}
+
+		exit := false
+
 		for i := 0; i < queryCount; i++ {
-			nodeRes := <-resChan
+			var nodeRes FindValueResultWithID
+			select {
+			case <-timeoutChan:
+				exit = true
+			case nodeRes = <-resChan:
+			}
+			if exit {
+				doneYet = true
+				break
+			}
 			if nodeRes.Res.Err != nil {
 				// TODO : remove node from list
 				for index, node := range ndv.Nodes {

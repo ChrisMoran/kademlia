@@ -21,7 +21,7 @@ func contactToAddrString(con kademlia.Contact) string {
 	return fmt.Sprintf("%s:%d", con.Host.String(), con.Port)
 }
 
-func doPing(kadem *kademlia.Kademlia, addressOrId string) {
+func doPing(kadem *kademlia.Kademlia, con kademlia.Contact, addressOrId string) {
 	var pingAddress string
 	if len(strings.Split(addressOrId, string(":"))) == 2 {
 		pingAddress = addressOrId
@@ -42,7 +42,7 @@ func doPing(kadem *kademlia.Kademlia, addressOrId string) {
 	if err != nil {
 		log.Fatal("DialHTTP: ", err)
 	}
-	ping := new(kademlia.Ping)
+	ping := kademlia.Ping{Sender: con}
 	ping.MsgID = kademlia.NewRandomID()
 	var pong kademlia.Pong
 	err = client.Call("Kademlia.Ping", ping, &pong)
@@ -89,13 +89,6 @@ func main() {
 	if err != nil {
 		log.Fatal("Could not parse local port\n")
 	}
-	me := kademlia.Contact{NodeID: kademlia.CopyID(kadem.NodeID), Host: net.ParseIP(myIpPort[0]), Port: uint16(port)}
-	if false == strings.Contains(listenStr, firstPeerStr) {
-		err = kadem.Join(me, ipAndPort[0], ipAndPort[1])
-		if err != nil {
-			log.Fatal("Error joinging network", err)
-		}
-	}
 
 	rpc.Register(kadem)
 	rpc.HandleHTTP()
@@ -106,6 +99,16 @@ func main() {
 
 	// Serve forever.
 	go http.Serve(l, nil)
+
+	me := kademlia.Contact{NodeID: kademlia.CopyID(kadem.NodeID), Host: net.ParseIP(myIpPort[0]), Port: uint16(port)}
+	if false == strings.Contains(listenStr, firstPeerStr) {
+		err = kadem.Join(me, ipAndPort[0], ipAndPort[1])
+		if err != nil {
+			log.Fatal("Error joinging network", err)
+		}
+	}
+
+	fmt.Println("Finished starting up")
 
 	// Confirm our server is up with a PING request and then exit.
 	// Your code should loop forever, reading instructions from stdin and
@@ -128,7 +131,7 @@ func main() {
 				fmt.Println("Invalid format ping\n\tping nodeID\n\tping host:port")
 				continue
 			}
-			doPing(kadem, command_parts[1])
+			doPing(kadem, me, command_parts[1])
 		case bytes.Equal(command, []byte("store")):
 			if len(command_parts) != 4 {
 				fmt.Println("Invalid format store\n\tstore nodeid key data")
