@@ -28,6 +28,7 @@ type Ping struct {
 
 type Pong struct {
 	MsgID ID
+	Sender Contact
 }
 
 func (k *Kademlia) Ping(ping Ping, pong *Pong) error {
