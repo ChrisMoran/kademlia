@@ -123,7 +123,7 @@ func TestStoreKey(t *testing.T) {
 		t.Error("Failed to store key-value pair")
 	}
 	checkMessageId(t, messageId, res.MsgID)
-	if false == bytes.Equal(k.StoredData[key], value) {
+	if false == bytes.Equal(k.StoredData[key].Data, value) {
 		t.Error("Value stored is incorrect")
 	}
 }

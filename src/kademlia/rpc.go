@@ -27,7 +27,7 @@ type Ping struct {
 }
 
 type Pong struct {
-	MsgID ID
+	MsgID  ID
 	Sender Contact
 }
 
@@ -55,7 +55,7 @@ func (k *Kademlia) Store(req StoreRequest, res *StoreResult) error {
 	var sliceCopy []byte = make([]byte, len(req.Value))
 	copy(sliceCopy, req.Value)
 	k.storedDataMutex.Lock()
-	k.StoredData[CopyID(req.Key)] = sliceCopy
+	k.StoredData[CopyID(req.Key)] = TimeValue{Data: sliceCopy, time: time.Now()}
 	k.storedDataMutex.Unlock()
 	res.MsgID = CopyID(req.MsgID)
 	return nil
@@ -76,6 +76,7 @@ func makeStoreRequest(node FoundNode, req StoreRequest, res *StoreResult) {
 		return
 	}
 
+	defer client.Close()
 	err = client.Call("Kademlia.Store", req, res)
 	if err != nil && res.Err == nil {
 		res.Err = err
@@ -185,6 +186,8 @@ func remoteFindNode(node FoundNode, req FindNodeRequest, res chan FindNodeResult
 		return
 	}
 	req.MsgID = NewRandomID()
+
+	defer client.Close()
 	err = client.Call("Kademlia.FindNode", req, retRes)
 	if err != nil && retRes.Err == nil {
 		retRes.Err = err
@@ -202,7 +205,7 @@ func (k *Kademlia) IterFindNode(req FindNodeRequest, res *FindNodeResult) error 
 	ndv := nodeDistanceVector{Nodes: make([]foundNodeDistance, 0, K)}
 	for _, node := range nodes {
 		ndv.Nodes = append(ndv.Nodes, foundNodeDistance{Node: node,
-			PrefixLen: req.MsgID.Xor(node.NodeID).PrefixLen(),
+			PrefixLen: req.NodeID.Xor(node.NodeID).PrefixLen(),
 			Queried:   false})
 	}
 	sort.Sort(ndv) // being lazy
@@ -241,7 +244,6 @@ func (k *Kademlia) IterFindNode(req FindNodeRequest, res *FindNodeResult) error 
 				break
 			}
 			if nodeRes.Res.Err != nil {
-				// TODO : remove node from list
 				for index, node := range ndv.Nodes {
 					if node.Node.NodeID.Equals(nodeRes.SourceID) {
 						ndv.Nodes = append(ndv.Nodes[:index], ndv.Nodes[i+1:]...)
@@ -251,42 +253,7 @@ func (k *Kademlia) IterFindNode(req FindNodeRequest, res *FindNodeResult) error 
 				continue
 			}
 
-			// incorporate results into list
-			// make a temp container to sort all known nodes so we can grab the closest
-			tempNdv := new(nodeDistanceVector)
-			tempNdv.Nodes = make([]foundNodeDistance, len(ndv.Nodes), 2*K)
-			copy(tempNdv.Nodes, ndv.Nodes)
-
-			for _, node := range nodeRes.Res.Nodes {
-				go k.UpdateContacts(FoundNodeToContact(node))
-
-				// check if we already know about this node
-				known := false
-				for _, knownNode := range ndv.Nodes {
-					if knownNode.Node.NodeID.Equals(node.NodeID) {
-						known = true
-					}
-				}
-				if known == false {
-					newNode := foundNodeDistance{Node: node,
-						PrefixLen: req.MsgID.Xor(node.NodeID).PrefixLen(),
-						Queried:   false}
-					tempNdv.Nodes = append(tempNdv.Nodes, newNode)
-				}
-			}
-			sort.Sort(tempNdv)
-
-			endIndex := K
-			if len(tempNdv.Nodes) < K {
-				endIndex = len(tempNdv.Nodes)
-			}
-			for index, node := range tempNdv.Nodes[0:endIndex] {
-				if index < len(ndv.Nodes) {
-					ndv.Nodes[index] = node
-				} else {
-					ndv.Nodes = append(ndv.Nodes, node)
-				}
-			}
+			mergeResults(k, &nodeRes.Res.Nodes, &ndv.Nodes, &req.NodeID)
 		}
 	}
 
@@ -300,9 +267,10 @@ func (k *Kademlia) IterFindNode(req FindNodeRequest, res *FindNodeResult) error 
 
 // FIND_VALUE
 type FindValueRequest struct {
-	Sender Contact
-	MsgID  ID
-	Key    ID
+	UpdateTimestamp bool
+	Sender          Contact
+	MsgID           ID
+	Key             ID
 }
 
 // If Value is nil, it should be ignored, and Nodes means the same as in a
@@ -327,14 +295,17 @@ func (k *Kademlia) FindValue(req FindValueRequest, res *FindValueResult) error {
 	res.MsgID = CopyID(req.MsgID)
 	k.storedDataMutex.Lock()
 	val, hasKey := k.StoredData[req.Key]
-	k.storedDataMutex.Unlock()
 	if hasKey {
-		res.Value = make([]byte, len(val))
-		copy(res.Value, val)
+		if req.UpdateTimestamp {
+			val.time = time.Now()
+			k.StoredData[req.Key] = val
+		}
+		res.Value = make([]byte, len(val.Data))
+		copy(res.Value, val.Data)
 	} else {
 		res.Nodes = k.FindCloseNodes(req.Key, req.Sender.NodeID, MaxBucketSize)
 	}
-
+	k.storedDataMutex.Unlock()
 	return nil
 }
 
@@ -347,6 +318,8 @@ func remoteFindValue(node FoundNode, req FindValueRequest, res chan FindValueRes
 		return
 	}
 	req.MsgID = NewRandomID()
+
+	defer client.Close()
 	err = client.Call("Kademlia.FindValue", req, retRes)
 	if err != nil && retRes.Err == nil {
 		retRes.Err = err
@@ -377,6 +350,7 @@ func (k *Kademlia) IterFindValue(req FindValueRequest, res *FindValueResult) err
 	timeoutChan := make(chan bool, 1)
 	go makeTimeout(timeoutChan, 8)
 
+	var resultHolder FindValueResult = FindValueResult{Value: nil, Nodes: nil}
 	for doneYet == false {
 		queryCount := 0
 		for _, node := range ndv.Nodes {
@@ -416,59 +390,77 @@ func (k *Kademlia) IterFindValue(req FindValueRequest, res *FindValueResult) err
 				continue
 			}
 
-			if nodeRes.Res.Value != nil {
-				res.Value = make([]byte, len(nodeRes.Res.Value))
-				copy(res.Value, nodeRes.Res.Value)
+			if nodeRes.Res.Value != nil && resultHolder.Value != nil {
+				resultHolder.Value = make([]byte, len(nodeRes.Res.Value))
+				copy(resultHolder.Value, nodeRes.Res.Value)
 				// these are here just for the command line to return the finder's ID
-				res.Nodes = make([]FoundNode, 0, 1)
-				res.Nodes = append(res.Nodes, FoundNode{NodeID: CopyID(nodeRes.SourceID)})
-				break
+				resultHolder.Nodes = make([]FoundNode, 0, 1)
+				resultHolder.Nodes = append(resultHolder.Nodes, FoundNode{NodeID: CopyID(nodeRes.SourceID)})
+
+				// exit when finding the first instance if not updateing timestamps
+				// otherwise keep going
+				if req.UpdateTimestamp == false {
+					doneYet = true
+					break
+				}
 			}
 
 			// incorporate results into list
 			// make a temp container to sort all known nodes so we can grab the closest
-			tempNdv := new(nodeDistanceVector)
-			tempNdv.Nodes = make([]foundNodeDistance, len(ndv.Nodes), 2*K)
-			copy(tempNdv.Nodes, ndv.Nodes)
-
-			for _, node := range nodeRes.Res.Nodes {
-				// check if we already know about this node
-				go k.UpdateContacts(FoundNodeToContact(node))
-
-				known := false
-				for _, knownNode := range ndv.Nodes {
-					if knownNode.Node.NodeID.Equals(node.NodeID) {
-						known = true
-					}
-				}
-				if known == false {
-					newNode := foundNodeDistance{Node: node,
-						PrefixLen: req.MsgID.Xor(node.NodeID).PrefixLen(),
-						Queried:   false}
-					tempNdv.Nodes = append(tempNdv.Nodes, newNode)
-				}
-			}
-			sort.Sort(tempNdv)
-
-			endIndex := K
-			if len(tempNdv.Nodes) < K {
-				endIndex = len(tempNdv.Nodes)
-			}
-			for index, node := range tempNdv.Nodes[0:endIndex] {
-				if index < len(ndv.Nodes) {
-					ndv.Nodes[index] = node
-				} else {
-					ndv.Nodes = append(ndv.Nodes, node)
-				}
-			}
+			mergeResults(k, &nodeRes.Res.Nodes, &ndv.Nodes, &req.Key)
 		}
 	}
 
-	if res.Value == nil {
+	if resultHolder.Value == nil {
 		res.Nodes = make([]FoundNode, len(ndv.Nodes))
 		for _, node := range ndv.Nodes {
 			res.Nodes = append(res.Nodes, node.Node)
 		}
+	} else {
+		res.Value = make([]byte, len(resultHolder.Value))
+		copy(res.Value, resultHolder.Value)
+
+		res.Nodes = make([]FoundNode, 0, 1)
+		res.Nodes = append(res.Nodes, FoundNode{NodeID: CopyID(resultHolder.Nodes[0].NodeID)})
 	}
 	return nil
+}
+
+func mergeResults(k *Kademlia, src *[]FoundNode, dst *[]foundNodeDistance, id *ID) {
+	var foundNodes []foundNodeDistance = *dst
+	tempNdv := new(nodeDistanceVector)
+	tempNdv.Nodes = make([]foundNodeDistance, len(foundNodes), 2*K)
+	copy(tempNdv.Nodes, foundNodes)
+
+	for _, node := range *src {
+		go k.UpdateContacts(FoundNodeToContact(node))
+
+		known := false
+		for _, knownNode := range foundNodes {
+			if knownNode.Node.NodeID.Equals(node.NodeID) {
+				known = true
+			}
+		}
+		if known == false {
+			newNode := foundNodeDistance{Node: node,
+				PrefixLen: id.Xor(node.NodeID).PrefixLen(),
+				Queried:   false}
+			tempNdv.Nodes = append(tempNdv.Nodes, newNode)
+		}
+	}
+
+	sort.Sort(tempNdv)
+
+	endIndex := K
+	if len(tempNdv.Nodes) < K {
+		endIndex = len(tempNdv.Nodes)
+	}
+
+	for index, node := range tempNdv.Nodes[0:endIndex] {
+		if index < len(foundNodes) {
+			foundNodes[index] = node
+		} else {
+			foundNodes = append(foundNodes, node)
+		}
+	}
 }

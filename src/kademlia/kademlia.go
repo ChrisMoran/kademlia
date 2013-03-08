@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/rpc"
 	"sync"
+	"time"
 )
 
 const BucketCount = IDBytes * 8
@@ -22,10 +23,21 @@ const MaxBucketSize = 10 // aka K
 const K = MaxBucketSize
 const ALPHA = 3
 
+// how long to wait between checks for stale data, in seconds
+const CLEANUP_SECONDS = 10
+
+// how old data must be to be cleaned up, in minutes
+const DATA_STALENESS_MIN = 1
+
+type TimeValue struct {
+	time time.Time
+	Data []byte
+}
+
 type Kademlia struct {
 	NodeID          ID
 	storedDataMutex sync.Mutex
-	StoredData      map[ID][]byte
+	StoredData      map[ID]TimeValue
 	Contacts        BucketList
 	contactsMutex   [BucketCount]sync.Mutex
 }
@@ -72,8 +84,10 @@ func (k *Kademlia) removeOldContacts(bucketNum int) (removed int) {
 			nextEl := el.Next()
 			_ = curBucket.Remove(el)
 			el, removed = nextEl, removed+1
+			client.Close()
 			continue
 		}
+		client.Close()
 		el = el.Next()
 	}
 	return
@@ -143,9 +157,12 @@ func (k *Kademlia) FindCloseNodes(key ID, requester ID, totalNum int) []FoundNod
 
 func (k *Kademlia) FindCloseContacts(key ID, requester ID, totalNum int) []Contact {
 	pre := k.NodeID.Xor(key).PrefixLen()
+
 	nodes := make([]Contact, 0, totalNum)
 
-	AddBucketToSlice(k, requester, pre, &nodes)
+	if pre < BucketCount {
+		AddBucketToSlice(k, requester, pre, &nodes)
+	}
 
 	for i := 1; (i <= pre || i+pre < BucketCount) && len(nodes) < totalNum; i++ {
 		if i <= pre {
@@ -164,15 +181,35 @@ func (k *Kademlia) FindCloseContacts(key ID, requester ID, totalNum int) []Conta
 	return nodes
 }
 
+func (k *Kademlia) cleanup() {
+	dur := time.Duration(CLEANUP_SECONDS) * time.Second
+	time_diff := time.Duration(DATA_STALENESS_MIN) * time.Minute
+	var now time.Time
+	for {
+		time.Sleep(dur)
+		k.storedDataMutex.Lock()
+		now = time.Now()
+
+		for key, v := range k.StoredData {
+			if now.After(v.time.Add(time_diff)) {
+				delete(k.StoredData, key)
+			}
+		}
+		k.storedDataMutex.Unlock()
+	}
+}
+
 func (k *Kademlia) Join(me Contact, ip string, port string) error {
 	// do an rpc call of findnode
 	req := FindNodeRequest{Sender: me, MsgID: NewRandomID(), NodeID: k.NodeID}
 	res := new(FindNodeResult)
 
 	client, err := rpc.DialHTTP("tcp", fmt.Sprintf("%s:%s", ip, port))
+
 	if err != nil {
 		return err
 	}
+	defer client.Close()
 	err = client.Call("Kademlia.FindNode", req, res)
 	if err != nil {
 		return err
@@ -187,7 +224,8 @@ func NewKademlia() *Kademlia {
 	// TODO: Assign yourself a random ID and prepare other state here.	
 	var inst *Kademlia = new(Kademlia)
 	inst.NodeID = NewRandomID()
-	inst.StoredData = make(map[ID][]byte)
+	inst.StoredData = make(map[ID]TimeValue)
 	inst.Contacts = CreateBucketList()
+	go inst.cleanup()
 	return inst
 }

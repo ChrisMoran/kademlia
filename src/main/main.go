@@ -55,6 +55,7 @@ func doPing(kadem *kademlia.Kademlia, con kademlia.Contact, addressOrId string) 
 	} else {
 		fmt.Print("ERR : response message id does not match\n")
 	}
+	_ = client.Close()
 }
 
 func main() {
@@ -167,6 +168,7 @@ func main() {
 				fmt.Printf("ERR: %v\n", err)
 				continue
 			}
+			_ = client.Close()
 
 			fmt.Println("OK")
 		case bytes.Equal(command, []byte("find_node")):
@@ -202,6 +204,8 @@ func main() {
 				fmt.Printf("ERR: %v\n", err)
 				continue
 			}
+
+			_ = client.Close()
 
 			fmt.Printf("OK\n")
 			for _, node := range res.Nodes {
@@ -244,6 +248,8 @@ func main() {
 				continue
 			}
 
+			_ = client.Close()
+
 			if res.Value != nil {
 				fmt.Printf("%s\n", string(res.Value))
 			} else {
@@ -268,10 +274,10 @@ func main() {
 				fmt.Printf("ERR: %v\n", err)
 				continue
 			}
-			var val []byte
-			val = kadem.StoredData[key]
-			if val != nil {
-				fmt.Printf("OK: %s\n", string(val))
+			var val kademlia.TimeValue
+			val, ok := kadem.StoredData[key]
+			if ok {
+				fmt.Printf("OK: %s\n", string(val.Data))
 			} else {
 				fmt.Printf("ERR no data for key\n")
 			}
@@ -308,7 +314,7 @@ func main() {
 			} else {
 				fmt.Println("Could not find a neighbor")
 			}
-		case bytes.Equal(command, []byte("iterativeFindNode")):
+		case bytes.Equal(command, []byte("iterativefindnode")):
 			if len(command_parts) != 2 {
 				fmt.Println("Invalid format iterativeFindNode")
 				continue
@@ -328,7 +334,7 @@ func main() {
 					fmt.Printf("%s", node.NodeID.AsString())
 				}
 			}
-		case bytes.Equal(command, []byte("iterativeFindValue")):
+		case bytes.Equal(command, []byte("iterativefindvalue")):
 			if len(command_parts) != 2 {
 				fmt.Println("Invalid format iterativeFindValue")
 				continue
