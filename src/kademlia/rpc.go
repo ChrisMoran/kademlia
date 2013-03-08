@@ -464,3 +464,123 @@ func mergeResults(k *Kademlia, src *[]FoundNode, dst *[]foundNodeDistance, id *I
 		}
 	}
 }
+
+type DeleteValueRequest struct {
+	Sender Contact
+	MsgID  ID
+	Key    ID
+}
+
+type DeleteValueResult struct {
+	Nodes []FoundNode
+	MsgID ID
+	Err   error
+}
+
+func (k *Kademlia) Delete(req DeleteValueRequest, res *DeleteValueResult) error {
+	go k.UpdateContacts(req.Sender)
+	res.MsgID = CopyID(req.MsgID)
+	k.storedDataMutex.Lock()
+	_, ok := k.StoredData[req.MsgID]
+	if ok {
+		delete(k.StoredData, req.MsgID)
+	}
+	k.storedDataMutex.Unlock()
+	res.Nodes = k.FindCloseNodes(req.Key, req.Sender.NodeID, K)
+	return nil
+}
+
+type DeleteValueResultWithID struct {
+	Res      DeleteValueResult
+	SourceID ID
+}
+
+func remoteDeleteValue(node FoundNode, req DeleteValueRequest, res chan DeleteValueResultWithID) {
+	retRes := new(DeleteValueResult)
+	defer (func() { res <- DeleteValueResultWithID{Res: *retRes, SourceID: CopyID(node.NodeID)} })()
+	client, err := rpc.DialHTTP("tcp", foundNodeToAddrStr(node))
+	if err != nil {
+		retRes.Err = err
+		return
+	}
+	req.MsgID = NewRandomID()
+
+	defer client.Close()
+	err = client.Call("Kademlia.Delete", req, retRes)
+	if err != nil && retRes.Err == nil {
+		retRes.Err = err
+	}
+	if false == req.MsgID.Equals(retRes.MsgID) {
+		retRes.Err = errors.New("Invalid message id returned")
+	}
+}
+
+// does best effort deletion, it's possible key will still be present after
+func (k *Kademlia) IterDelete(req DeleteValueRequest, res *DeleteValueResult) error {
+	// third copy of this function......
+
+	nodes := k.FindCloseNodes(req.Key, k.NodeID, K)
+	res.MsgID = CopyID(req.MsgID)
+	nodes = nodes[0:ALPHA]
+	ndv := nodeDistanceVector{Nodes: make([]foundNodeDistance, 0, K)}
+	for _, node := range nodes {
+		ndv.Nodes = append(ndv.Nodes, foundNodeDistance{Node: node,
+			PrefixLen: req.Key.Xor(node.NodeID).PrefixLen(),
+			Queried:   false})
+	}
+	sort.Sort(ndv) // being lazy
+	ndv.Closest = ndv.Nodes[0].PrefixLen
+	resChan := make(chan DeleteValueResultWithID, ALPHA)
+	doneYet := false
+
+	//timeout after 8 seconds
+	timeoutChan := make(chan bool, 1)
+	go makeTimeout(timeoutChan, 8)
+
+	for doneYet == false {
+		queryCount := 0
+		for _, node := range ndv.Nodes {
+			if node.Queried == false {
+				node.Queried, queryCount = true, queryCount+1
+				go remoteDeleteValue(node.Node, req, resChan)
+				if queryCount == ALPHA {
+					break
+				}
+			}
+		}
+		if queryCount == 0 {
+			doneYet = true
+		}
+		exit := false
+		for i := 0; i < queryCount; i++ {
+			var nodeRes DeleteValueResultWithID
+			select {
+			case <-timeoutChan:
+				exit = true
+			case nodeRes = <-resChan:
+			}
+			if exit {
+				doneYet = true
+				break
+			}
+			if nodeRes.Res.Err != nil {
+				for index, node := range ndv.Nodes {
+					if node.Node.NodeID.Equals(nodeRes.SourceID) {
+						ndv.Nodes = append(ndv.Nodes[:index], ndv.Nodes[i+1:]...)
+						break
+					}
+				}
+				continue
+			}
+
+			mergeResults(k, &nodeRes.Res.Nodes, &ndv.Nodes, &req.Key)
+		}
+	}
+
+	res.Nodes = make([]FoundNode, len(ndv.Nodes))
+	for _, node := range ndv.Nodes {
+		res.Nodes = append(res.Nodes, node.Node)
+	}
+
+	return nil
+}
