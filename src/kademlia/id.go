@@ -92,8 +92,14 @@ func FromString(idstr string) (ret ID, err error) {
 
 // Generate a ID matching a given []byte.
 func FromBytes(idbytes []byte) (ret ID, err error) {
-	n, err := hex.Decode(ret, idbytes)
+    bytes := make([]byte, len(idbytes))
+	n, err := hex.Decode(bytes, idbytes)
 	if err != nil {
 		return
 	}
+
+	for i := 0; i < n; i++ {
+	    ret[i] = bytes[i]
+    }
+    return
 }
