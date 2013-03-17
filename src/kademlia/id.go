@@ -90,3 +90,10 @@ func FromString(idstr string) (ret ID, err error) {
     return
 }
 
+// Generate a ID matching a given []byte.
+func FromBytes(idbytes []byte) (ret ID, err error) {
+    n, err := hex.Decode(ret, idbytes)
+    if err != nil {
+        return
+    }
+}
