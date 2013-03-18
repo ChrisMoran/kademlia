@@ -345,14 +345,50 @@ func (k *Kademlia) FindDir(req FindDirRequest, res *FindDirResult) {
             startInode = req.StartInode
             startKey = req.StartKey
         } else {
-            rootRes := new(FindDirResult)
-            k.FindRoot(req, rootRes)
+            rootKey, err := FromString("/")
+            if err != nil {
+                res.Err = err
+                return
+            }
+            rootReq := FindValueRequest{UpdateTimestamp: true,
+                                        Sender:          req.Sender,
+                                        MsgID:           CopyID(req.MsgID),
+                                        Key:             rootKey}
+            rootRes := new(FindValueResult)
+            k.IterFindValue(rootReq, rootRes)
             if rootRes.Err != nil {
                 res.Err = rootRes.Err
                 return
             }
-            startInode = rootRes.Inode
-            startKey = rootRes.Key
+
+            if len(rootRes.Value) > 0 {
+                b := bytes.NewBuffer(rootRes.Value)
+                rootInode := new(DirInode)
+                gob.NewDecoder(b).Decode(rootInode)
+                startInode = *rootInode
+                startKey = rootKey
+            } else {
+                rootMeta := MetaData{Name:         "/",
+                                     Size:         0,
+                                     LastRead:     time.Now(),
+                                     LastModified: time.Now()}
+                rootInode := DirInode{Meta: rootMeta, Files: make(map[string]ID, 0)}
+                b := new(bytes.Buffer)
+                gob.NewEncoder(b).Encode(rootInode)
+                rootInodeValue := b.Bytes()
+                stReq := StoreRequest{Sender: req.Sender,
+                                      MsgID:  CopyID(req.MsgID),
+                                      Key:    rootKey,
+                                      Value:  rootInodeValue}
+                stRes := new(StoreResult)
+                k.IterStore(stReq, stRes)
+                if stRes.Err != nil {
+                    res.Err = stRes.Err
+                    return
+                }
+                startInode = rootInode
+                startKey = rootKey
+            }
         }
 
         fdReq := FindDirRequest{Sender:     req.Sender,
@@ -398,14 +434,5 @@ func (k *Kademlia) FindDir(req FindDirRequest, res *FindDirResult) {
             res.Err = errors.New("The target directory is not under this path")
         }
     }
-    return
-}
-
-// Note: this is only placeholder
-// ToDo: find root directory and return its inode and key in dht
-func (k *Kademlia) FindRoot(req FindDirRequest, res *FindDirResult) {
-    res.MsgID = CopyID(req.MsgID)
-    res.Inode = req.StartInode
-    res.Key = req.StartKey
     return
 }

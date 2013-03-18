@@ -5,6 +5,10 @@ package kademlia
 import (
 	"encoding/hex"
 	"math/rand"
+	"crypto/md5"
+	"io"
+	"fmt"
+	"bytes"
 )
 
 // IDs are 160-bit ints. We're going to use byte arrays with a number of
@@ -79,7 +83,10 @@ func CopyID(id ID) (ret ID) {
 
 // Generate a ID matching a given string.
 func FromString(idstr string) (ret ID, err error) {
-	bytes, err := hex.DecodeString(idstr)
+    h := md5.New()
+    io.WriteString(h, idstr)
+    s := fmt.Sprintf("%x", h.Sum(nil))
+    bytes, err := hex.DecodeString(s)
 	if err != nil {
 		return
 	}
@@ -92,14 +99,8 @@ func FromString(idstr string) (ret ID, err error) {
 
 // Generate a ID matching a given []byte.
 func FromBytes(idbytes []byte) (ret ID, err error) {
-    bytes := make([]byte, len(idbytes))
-	n, err := hex.Decode(bytes, idbytes)
-	if err != nil {
-		return
-	}
-
-	for i := 0; i < n; i++ {
-	    ret[i] = bytes[i]
-    }
+    b := bytes.NewBuffer(idbytes)
+    s := b.String()
+    ret, err = FromString(s)
     return
 }
