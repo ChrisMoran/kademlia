@@ -10,7 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/rpc"
+	"strings"
 	"sync"
 	"time"
 )
@@ -27,7 +29,7 @@ const ALPHA = 3
 const CLEANUP_SECONDS = 10
 
 // how old data must be to be cleaned up, in minutes
-const DATA_STALENESS_MIN = 1
+const DATA_STALENESS_MIN = 5
 
 type TimeValue struct {
 	time time.Time
@@ -47,6 +49,28 @@ func CreateBucketList() (blist BucketList) {
 		blist[i] = list.New()
 	}
 	return
+}
+
+func (k *Kademlia) Start(self Contact, firstContactIp string, firstContactPort string) error {
+	rpc.Register(k)
+	rpc.HandleHTTP()
+
+	listenStr := fmt.Sprintf("%s:%d", self.Host.String(), self.Port)
+	l, err := net.Listen("tcp", listenStr)
+	if err != nil {
+		return err
+	}
+
+	// Serve forever.
+	go http.Serve(l, nil)
+
+	if false == strings.Contains(listenStr, fmt.Sprintf("%s:%s", firstContactIp, firstContactPort)) {
+		err = k.Join(self, firstContactIp, firstContactPort)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (k *Kademlia) ContactFromID(id ID) (c Contact, e error) {
