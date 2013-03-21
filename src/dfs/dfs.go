@@ -6,6 +6,7 @@ import (
 	"errors"
 	"kademlia"
 	"strings"
+	"time"
 )
 
 const FILE_INODE_TYPE = uint8(0x00)
@@ -135,6 +136,14 @@ func DeserializeDir(b []byte) (*DirINode, error) {
 	return d, nil
 }
 
+func (d *DFS) keepRootAlive() {
+	dur, _ := time.ParseDuration("30s")
+	for {
+		time.Sleep(dur)
+		d.find(d.RootID, true)
+	}
+}
+
 func (d *DFS) Start(self kademlia.Contact, firstContactIp string, firstContactPort string) error {
 	neighborCount, tries := 0, 3
 
@@ -158,6 +167,7 @@ func (d *DFS) Start(self kademlia.Contact, firstContactIp string, firstContactPo
 	root_bytes := root.Serialize()
 
 	err = d.store(d.RootID, root_bytes)
+	go d.keepRootAlive()
 	return err
 }
 
