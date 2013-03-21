@@ -65,10 +65,15 @@ func (d *DFS) store(key kademlia.ID, value []byte) error {
 
 	res := new(kademlia.StoreResult)
 
-	_ = d.Kadem.IterStore(req, res)
+	storeTries, num := 3, 0
 
-	if res.Err != nil {
-		return res.Err
+	for num == 0 && storeTries > 0 {
+		_, num = d.Kadem.IterStore(req, res)
+		storeTries -= 1
+	}
+
+	if num == 0 {
+		return errors.New("did not store value on any neighbors")
 	}
 	return nil
 }
@@ -131,9 +136,19 @@ func DeserializeDir(b []byte) (*DirINode, error) {
 }
 
 func (d *DFS) Start(self kademlia.Contact, firstContactIp string, firstContactPort string) error {
-	err := d.Kadem.Start(self, firstContactIp, firstContactPort)
-	if err != nil {
-		return err
+	neighborCount, tries := 0, 3
+
+	var err error
+	for neighborCount == 0 && tries > 0 {
+		err, neighborCount = d.Kadem.Start(self, firstContactIp, firstContactPort)
+		tries -= 1
+		if err != nil {
+			return err
+		}
+	}
+
+	if neighborCount == 0 {
+		return errors.New("Could not establish any neighbor nodes")
 	}
 
 	d.Self = kademlia.Contact{NodeID: kademlia.CopyID(self.NodeID), Host: self.Host, Port: self.Port}
@@ -181,6 +196,7 @@ func (d *DFS) traverseDirectories(path string) (kademlia.ID, *DirINode, error) {
 						curr_inode.Name = temp_inode.Name
 						curr_inode.ChildNodes = make([]kademlia.ID, len(temp_inode.ChildNodes))
 						copy(curr_inode.ChildNodes, temp_inode.ChildNodes)
+						curr_id = i
 						break
 					}
 				}
@@ -232,7 +248,7 @@ func (d *DFS) ListDirectory(parentPath string) ([]string, error) {
 				ret = append(ret, dn.Name)
 			} else if isFileINode(b) {
 				f, _ = DeserializeFile(b)
-				ret = append(ret, f.Name)
+				ret = append(ret, strings.Join([]string{"file", f.Name}, " "))
 			} else {
 				ret = append(ret, "UNKNOWN!!!") // do something better
 			}
@@ -250,15 +266,22 @@ func max(x, y int) int {
 	return y
 }
 
+func min(x, y int) int {
+	if x < y {
+		return x
+	}
+	return y
+}
+
 func (d *DFS) storeFileContents(contents []byte) ([]kademlia.ID, error) {
 	content_len := len(contents)
 	chunk_count := int(content_len / FILE_CHUNK_SIZE)
 	if (content_len % FILE_CHUNK_SIZE) != 0 {
 		chunk_count += 1
 	}
-	start, end := 0, FILE_CHUNK_SIZE
+	start, end := 0, min(FILE_CHUNK_SIZE, content_len)
 
-	ret := make([]kademlia.ID, chunk_count)
+	ret := make([]kademlia.ID, 0)
 	for i := 0; i < chunk_count; i++ {
 		id := kademlia.NewRandomID()
 		ret = append(ret, id)
@@ -266,7 +289,7 @@ func (d *DFS) storeFileContents(contents []byte) ([]kademlia.ID, error) {
 		if err != nil {
 			return ret, err
 		}
-		start, end = end, max(end+FILE_CHUNK_SIZE, content_len)
+		start, end = end, min(end+FILE_CHUNK_SIZE, content_len)
 	}
 	return ret, nil
 }
@@ -283,7 +306,8 @@ func (d *DFS) MakeFile(parentPath string, fileName string, contents []byte) erro
 	}
 
 	f_id := kademlia.NewRandomID()
-	f := FileINode{Name: fileName, DataNodes: file_ids}
+	f := FileINode{Name: fileName, DataNodes: make([]kademlia.ID, len(file_ids))}
+	copy(f.DataNodes, file_ids)
 
 	err = d.store(f_id, f.Serialize())
 	if err != nil {
@@ -311,7 +335,7 @@ func (d *DFS) getFileContents(fileINode *FileINode) ([]byte, error) {
 func (d *DFS) GetFile(parentPath string, fileName string) ([]byte, error) {
 	_, parent_node, err := d.traverseDirectories(parentPath)
 	if err != nil {
-		return make([]byte, 0), nil
+		return make([]byte, 0), err
 	}
 
 	f := new(FileINode)

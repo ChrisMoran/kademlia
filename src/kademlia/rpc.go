@@ -83,13 +83,16 @@ func makeStoreRequest(node FoundNode, req StoreRequest, res *StoreResult) {
 	}
 }
 
-func (k *Kademlia) IterStore(req StoreRequest, res *StoreResult) FoundNode {
+func (k *Kademlia) IterStore(req StoreRequest, res *StoreResult) (FoundNode, int) {
 	//nodes := k.FindCloseContacts(req.Key, k.NodeID, K)
 	res.MsgID = CopyID(req.MsgID)
 	fnReq := FindNodeRequest{Sender: req.Sender, MsgID: NewRandomID(), NodeID: CopyID(req.Key)}
 	fnRes := new(FindNodeResult)
 	k.IterFindNode(fnReq, fnRes)
 	var lastNode FoundNode = FoundNode{}
+
+	storedNodeCount := len(fnRes.Nodes)
+
 	if len(fnRes.Nodes) > 0 {
 
 		lastNode = fnRes.Nodes[len(fnRes.Nodes)-1]
@@ -106,7 +109,7 @@ func (k *Kademlia) IterStore(req StoreRequest, res *StoreResult) FoundNode {
 			}
 		}
 	}
-	return lastNode
+	return lastNode, storedNodeCount
 }
 
 // FIND_NODE
@@ -283,7 +286,7 @@ type FindValueResult struct {
 }
 
 type FindValueResultWithID struct {
-	Res      FindValueResult
+	Res      *FindValueResult
 	SourceID ID
 }
 
@@ -309,9 +312,9 @@ func (k *Kademlia) FindValue(req FindValueRequest, res *FindValueResult) error {
 	return nil
 }
 
-func remoteFindValue(node FoundNode, req FindValueRequest, res chan FindValueResultWithID) {
+func remoteFindValue(node FoundNode, req FindValueRequest, res chan *FindValueResultWithID) {
 	retRes := new(FindValueResult)
-	defer (func() { res <- FindValueResultWithID{Res: *retRes, SourceID: CopyID(node.NodeID)} })()
+	//defer (func() { res <- FindValueResultWithID{Res: retRes, SourceID: CopyID(node.NodeID)} })()
 	client, err := rpc.DialHTTP("tcp", foundNodeToAddrStr(node))
 	if err != nil {
 		retRes.Err = err
@@ -324,9 +327,15 @@ func remoteFindValue(node FoundNode, req FindValueRequest, res chan FindValueRes
 	if err != nil && retRes.Err == nil {
 		retRes.Err = err
 	}
+
 	if false == req.MsgID.Equals(retRes.MsgID) {
 		retRes.Err = errors.New("Invalid message id returned")
 	}
+
+	ret := new(FindValueResultWithID)
+	ret.SourceID = CopyID(node.NodeID)
+	ret.Res = retRes
+	res <- ret
 }
 
 // if we find the value, the first foundnode in the result slice is the one that returned it
@@ -344,7 +353,7 @@ func (k *Kademlia) IterFindValue(req FindValueRequest, res *FindValueResult) err
 	}
 	sort.Sort(ndv) // being lazy
 	ndv.Closest = ndv.Nodes[0].PrefixLen
-	resChan := make(chan FindValueResultWithID, ALPHA)
+	resChan := make(chan *FindValueResultWithID, ALPHA)
 	doneYet := false
 
 	timeoutChan := make(chan bool, 1)
@@ -369,7 +378,7 @@ func (k *Kademlia) IterFindValue(req FindValueRequest, res *FindValueResult) err
 		exit := false
 
 		for i := 0; i < queryCount; i++ {
-			var nodeRes FindValueResultWithID
+			var nodeRes *FindValueResultWithID
 			select {
 			case <-timeoutChan:
 				exit = true
@@ -379,8 +388,10 @@ func (k *Kademlia) IterFindValue(req FindValueRequest, res *FindValueResult) err
 				doneYet = true
 				break
 			}
+
 			if nodeRes.Res.Err != nil {
 				// TODO : remove node from list
+
 				for index, node := range ndv.Nodes {
 					if node.Node.NodeID.Equals(nodeRes.SourceID) {
 						ndv.Nodes = append(ndv.Nodes[:index], ndv.Nodes[i+1:]...)
@@ -390,7 +401,8 @@ func (k *Kademlia) IterFindValue(req FindValueRequest, res *FindValueResult) err
 				continue
 			}
 
-			if nodeRes.Res.Value != nil && resultHolder.Value != nil {
+			if len(nodeRes.Res.Value) > 0 {
+
 				resultHolder.Value = make([]byte, len(nodeRes.Res.Value))
 				copy(resultHolder.Value, nodeRes.Res.Value)
 				// these are here just for the command line to return the finder's ID
@@ -399,10 +411,12 @@ func (k *Kademlia) IterFindValue(req FindValueRequest, res *FindValueResult) err
 
 				// exit when finding the first instance if not updateing timestamps
 				// otherwise keep going
-				if req.UpdateTimestamp == false {
-					doneYet = true
-					break
-				}
+				doneYet = true
+				break
+				// if req.UpdateTimestamp == false {
+				// 	doneYet = true
+				// 	break
+				// }
 			}
 
 			// incorporate results into list

@@ -3,12 +3,12 @@ package kademlia
 // Contains definitions for the 160-bit identifiers used throughout kademlia.
 
 import (
-	"encoding/hex"
-	"math/rand"
-	"crypto/md5"
-	"io"
-	"fmt"
 	"bytes"
+	// "crypto/md5"
+	"encoding/hex"
+	// "fmt"
+	//"io"
+	"math/rand"
 )
 
 // IDs are 160-bit ints. We're going to use byte arrays with a number of
@@ -83,6 +83,21 @@ func CopyID(id ID) (ret ID) {
 
 // Generate a ID matching a given string.
 func FromString(idstr string) (ret ID, err error) {
+	bytes, err := hex.DecodeString(idstr)
+	if err != nil {
+		return
+	}
+
+	for i := 0; i < IDBytes; i++ {
+		ret[i] = bytes[i]
+	}
+	return
+}
+
+/*
+
+// Generate a ID matching a given string.
+func FromString(idstr string) (ret ID, err error) {
     h := md5.New()
     io.WriteString(h, idstr)
     s := fmt.Sprintf("%x", h.Sum(nil))
@@ -95,12 +110,12 @@ func FromString(idstr string) (ret ID, err error) {
 		ret[i] = bytes[i]
 	}
 	return
-}
+}*/
 
 // Generate a ID matching a given []byte.
 func FromBytes(idbytes []byte) (ret ID, err error) {
-    b := bytes.NewBuffer(idbytes)
-    s := b.String()
-    ret, err = FromString(s)
-    return
+	b := bytes.NewBuffer(idbytes)
+	s := b.String()
+	ret, err = FromString(s)
+	return
 }

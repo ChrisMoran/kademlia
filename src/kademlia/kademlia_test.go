@@ -285,7 +285,9 @@ func TestFindNodesWithMoreContacts(t *testing.T) {
 		}
 	}
 
-	ds = ds[0:cutoff]
+	if cutoff < len(ds) {
+		ds = ds[0:cutoff]
+	}
 
 	req := FindNodeRequest{Sender: me, MsgID: msgId, NodeID: me.NodeID}
 	res := new(FindNodeResult)

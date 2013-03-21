@@ -51,26 +51,29 @@ func CreateBucketList() (blist BucketList) {
 	return
 }
 
-func (k *Kademlia) Start(self Contact, firstContactIp string, firstContactPort string) error {
+func (k *Kademlia) Start(self Contact, firstContactIp string, firstContactPort string) (error, int) {
 	rpc.Register(k)
 	rpc.HandleHTTP()
 
 	listenStr := fmt.Sprintf("%s:%d", self.Host.String(), self.Port)
+
 	l, err := net.Listen("tcp", listenStr)
 	if err != nil {
-		return err
+		return err, 0
 	}
 
 	// Serve forever.
 	go http.Serve(l, nil)
 
+	count := 0
 	if false == strings.Contains(listenStr, fmt.Sprintf("%s:%s", firstContactIp, firstContactPort)) {
-		err = k.Join(self, firstContactIp, firstContactPort)
+
+		err, count = k.Join(self, firstContactIp, firstContactPort)
 		if err != nil {
-			return err
+			return err, count
 		}
 	}
-	return nil
+	return nil, count
 }
 
 func (k *Kademlia) ContactFromID(id ID) (c Contact, e error) {
@@ -223,7 +226,7 @@ func (k *Kademlia) cleanup() {
 	}
 }
 
-func (k *Kademlia) Join(me Contact, ip string, port string) error {
+func (k *Kademlia) Join(me Contact, ip string, port string) (error, int) {
 	// do an rpc call of findnode
 	req := FindNodeRequest{Sender: me, MsgID: NewRandomID(), NodeID: k.NodeID}
 	res := new(FindNodeResult)
@@ -231,17 +234,18 @@ func (k *Kademlia) Join(me Contact, ip string, port string) error {
 	client, err := rpc.DialHTTP("tcp", fmt.Sprintf("%s:%s", ip, port))
 
 	if err != nil {
-		return err
+		return err, 0
 	}
 	defer client.Close()
 	err = client.Call("Kademlia.FindNode", req, res)
 	if err != nil {
-		return err
+		return err, 0
 	}
+
 	for _, node := range res.Nodes {
 		go k.UpdateContacts(FoundNodeToContact(node))
 	}
-	return nil
+	return nil, len(res.Nodes)
 }
 
 func NewKademlia() *Kademlia {

@@ -29,6 +29,7 @@ func main() {
 	}
 	listenStr := args[0]
 	firstPeerStr := args[1]
+	log.Printf("arg 0 is %s arg 1 is %s", listenStr, firstPeerStr)
 
 	fmt.Printf("kademlia starting up!\n")
 	dfs := dfs.NewDFS()
@@ -50,7 +51,10 @@ func main() {
 	}
 	me := kademlia.Contact{NodeID: kademlia.CopyID(dfs.Kadem.NodeID), Host: net.ParseIP(myIpPort[0]), Port: uint16(port)}
 
-	dfs.Start(me, ipAndPort[0], ipAndPort[1])
+	err = dfs.Start(me, ipAndPort[0], ipAndPort[1])
+	if err != nil {
+		log.Fatal("error initializing ", err)
+	}
 
 	input := bufio.NewReader(os.Stdin)
 	for {
@@ -87,7 +91,9 @@ func main() {
 				continue
 			}
 			for _, c := range contents {
-				log.Println(c)
+				if c != "" {
+					log.Println(c)
+				}
 			}
 		case strings.Contains(command_parts[0], "put"):
 			if len(command_parts) != 4 {
@@ -99,10 +105,9 @@ func main() {
 				log.Println("could not read file contents for", command_parts[3], err)
 				continue
 			}
-
 			err = dfs.MakeFile(command_parts[1], command_parts[2], bytes)
 			if err != nil {
-				log.Println("error creating file", command_parts[2], err)
+				log.Println("error creating file ", command_parts[2], " ", err)
 			} else {
 				log.Println("created file", command_parts[2])
 			}
@@ -118,9 +123,7 @@ func main() {
 				continue
 			}
 			if len(command_parts) == 3 {
-				for _, b := range bytes {
-					log.Print(b)
-				}
+				log.Println(string(bytes))
 			} else {
 				err = ioutil.WriteFile(command_parts[3], bytes, 0644)
 				if err != nil {
